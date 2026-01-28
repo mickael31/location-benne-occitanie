@@ -2,6 +2,10 @@
 
 Site statique (Vite + React) avec un fichier de contenu `data.config` éditable depuis une page d’administration.
 
+## Déploiement GitHub Pages (important)
+
+Dans GitHub : **Settings → Pages → Build and deployment → Source : “GitHub Actions”**.
+
 ## Contenu du site
 
 - Le wording du site est chargé depuis `public/data.config` (JSON).

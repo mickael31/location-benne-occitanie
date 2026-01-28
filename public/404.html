@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redirection…</title>
+    <script>
+      (function () {
+        // If someone opens a route without the hash on GitHub Pages (ex: /repo/contact),
+        // redirect to the HashRouter URL (ex: /repo/#/contact).
+        var path = window.location.pathname || '/';
+        var search = window.location.search || '';
+        var segments = path.split('/').filter(Boolean);
+
+        var base = '';
+        var routeSegments = segments;
+        if (window.location.hostname.endsWith('.github.io') && segments.length > 1) {
+          base = '/' + segments[0];
+          routeSegments = segments.slice(1);
+        }
+
+        var route = routeSegments.join('/');
+        window.location.replace(base + '/' + search + '#/' + route);
+      })();
+    </script>
+  </head>
+  <body>
+    Redirection…
+  </body>
+</html>

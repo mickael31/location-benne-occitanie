@@ -8,6 +8,18 @@
     <meta name="theme-color" content="#059669" />
     <title>Location Benne Occitanie</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      (function () {
+        // GitHub Pages sometimes serves the site without a trailing slash (ex: /repo),
+        // which breaks relative asset paths (./assets/...). Force a trailing slash.
+        var p = window.location.pathname || '/';
+        var last = p.split('/').filter(Boolean).slice(-1)[0] || '';
+        var looksLikeFile = last.includes('.');
+        if (p.length > 1 && !p.endsWith('/') && !looksLikeFile) {
+          window.location.replace(p + '/' + window.location.search + window.location.hash);
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
