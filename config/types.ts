@@ -186,6 +186,12 @@ export interface PrivacyConfig {
 }
 
 export interface AdminConfig {
+  gate: {
+    enabled: boolean;
+    salt: string; // base64
+    passwordHash: string; // base64
+    iterations: number;
+  };
   github: {
     owner: string;
     repo: string;

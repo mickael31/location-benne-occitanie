@@ -410,6 +410,12 @@ export const DEFAULT_SITE_CONFIG: SiteConfig = {
     ],
   },
   admin: {
+    gate: {
+      enabled: false,
+      salt: '',
+      passwordHash: '',
+      iterations: 600_000,
+    },
     github: {
       owner: '',
       repo: '',

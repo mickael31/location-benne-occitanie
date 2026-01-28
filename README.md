@@ -17,6 +17,12 @@ Dans GitHub : **Settings → Pages → Build and deployment → Source : “GitH
 - Fonctionnement : l’admin charge `public/data.config` depuis GitHub, vous l’éditez, puis vous sauvegardez (commit via l’API GitHub).
 - Sécurité : utilisez un **Fine-grained Personal Access Token** limité au dépôt (permission **Contents: Read & Write**). Le token est conservé en **sessionStorage** si vous cochez l’option.
 
+## Admin — mot de passe
+
+Vous pouvez activer un mot de passe pour l’admin (hash PBKDF2) via `admin.gate` dans `public/data.config` (générable depuis l’admin).
+
+> Important : GitHub Pages = site statique, donc protection **côté client**. Utilisez un mot de passe long + gardez le token GitHub privé.
+
 ## Avis Google (récupération)
 
 L’admin peut se connecter à Google Business Profile pour récupérer les avis.

@@ -15,6 +15,7 @@ import {
   type MyBusinessLocation,
   type MyBusinessReview,
 } from '../services/googleBusinessProfile';
+import { createGateFromPassword, isGateEnabled, pbkdf2HashPassword, verifyPasswordHash } from '../services/adminGate';
 
 type LoadStatus = 'idle' | 'checking' | 'ready' | 'error';
 
@@ -104,6 +105,7 @@ type GithubContentResponse = { sha: string; content: string; encoding: string };
 type GithubUpdateResponse = { commit?: { html_url?: string } };
 
 const SESSION_TOKEN_KEY = 'lbo_admin_github_token';
+const SESSION_GATE_KEY = 'lbo_admin_gate_unlocked';
 
 const Admin: React.FC = () => {
   const { config: runtimeConfig, setConfig: setRuntimeConfig } = useSiteConfig();
@@ -111,6 +113,20 @@ const Admin: React.FC = () => {
   const inferred = useMemo(() => inferGithubRepoFromLocation(), []);
   const defaults = runtimeConfig.admin.github;
   const googleDefaults = runtimeConfig.admin.google;
+  const gateDefaults = runtimeConfig.admin.gate;
+
+  const requiresGate = isGateEnabled(gateDefaults);
+
+  const [gateUnlocked, setGateUnlocked] = useState<boolean>(!requiresGate);
+  const [gatePassword, setGatePassword] = useState<string>('');
+  const [gateStatus, setGateStatus] = useState<'idle' | 'checking' | 'error'>('idle');
+  const [gateError, setGateError] = useState<string | null>(null);
+
+  const [newGatePassword, setNewGatePassword] = useState<string>('');
+  const [newGatePassword2, setNewGatePassword2] = useState<string>('');
+  const [gateIterations, setGateIterations] = useState<number>(gateDefaults.iterations || 600_000);
+  const [gateGenStatus, setGateGenStatus] = useState<'idle' | 'generating' | 'generated' | 'error'>('idle');
+  const [gateGenError, setGateGenError] = useState<string | null>(null);
 
   const [owner, setOwner] = useState<string>(defaults.owner || inferred?.owner || '');
   const [repo, setRepo] = useState<string>(defaults.repo || inferred?.repo || '');
@@ -146,12 +162,24 @@ const Admin: React.FC = () => {
   const hasUserGate = allowedUsers.length > 0;
 
   useEffect(() => {
+    if (!requiresGate) {
+      setGateUnlocked(true);
+      sessionStorage.removeItem(SESSION_GATE_KEY);
+      return;
+    }
+
+    setGateUnlocked(sessionStorage.getItem(SESSION_GATE_KEY) === '1');
+  }, [requiresGate]);
+
+  useEffect(() => {
+    if (requiresGate && !gateUnlocked) return;
+
     const stored = sessionStorage.getItem(SESSION_TOKEN_KEY);
     if (stored) {
       setToken(stored);
       setRememberSession(true);
     }
-  }, []);
+  }, [gateUnlocked, requiresGate]);
 
   useEffect(() => {
     if (!rememberSession) {
@@ -268,7 +296,102 @@ const Admin: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const lockGate = () => {
+    sessionStorage.removeItem(SESSION_GATE_KEY);
+    setGateUnlocked(false);
+    setGatePassword('');
+    setGateStatus('idle');
+    setGateError(null);
+  };
+
+  const unlockGate = async () => {
+    setGateError(null);
+    setGateStatus('checking');
+
+    try {
+      if (!isGateEnabled(gateDefaults)) {
+        setGateUnlocked(true);
+        setGateStatus('idle');
+        return;
+      }
+
+      const password = gatePassword;
+      if (!password) throw new Error('Mot de passe requis.');
+
+      const actualHash = await pbkdf2HashPassword({
+        password,
+        saltBase64: gateDefaults.salt,
+        iterations: gateDefaults.iterations,
+      });
+
+      const ok = verifyPasswordHash({ expectedHashBase64: gateDefaults.passwordHash, actualHashBase64: actualHash });
+      if (!ok) throw new Error('Mot de passe incorrect.');
+
+      sessionStorage.setItem(SESSION_GATE_KEY, '1');
+      setGateUnlocked(true);
+      setGatePassword('');
+      setGateStatus('idle');
+    } catch (err) {
+      sessionStorage.removeItem(SESSION_GATE_KEY);
+      setGateUnlocked(false);
+      setGateStatus('error');
+      setGateError(err instanceof Error ? err.message : 'Erreur inconnue.');
+    }
+  };
+
+  const applyNewGateToEditor = async () => {
+    setGateGenError(null);
+    setGateGenStatus('generating');
+
+    try {
+      const p1 = newGatePassword;
+      const p2 = newGatePassword2;
+      if (!p1 || !p2) throw new Error('Entrez le mot de passe et la confirmation.');
+      if (p1 !== p2) throw new Error('Les mots de passe ne correspondent pas.');
+      if (p1.length < 12) throw new Error('Mot de passe trop court (12 caractères minimum recommandé).');
+
+      const iterations = Math.max(100_000, Math.min(2_000_000, Math.floor(gateIterations || 600_000)));
+      const gate = await createGateFromPassword({ password: p1, iterations });
+
+      const parsed = editorText.trim() ? (JSON.parse(editorText) as unknown) : (DEFAULT_SITE_CONFIG as unknown);
+      const normalized = mergeDeep(DEFAULT_SITE_CONFIG, parsed) as any;
+      normalized.admin = normalized.admin ?? {};
+      normalized.admin.gate = gate;
+
+      setEditorText(JSON.stringify(normalized, null, 2));
+      setValidationError(null);
+      setNewGatePassword('');
+      setNewGatePassword2('');
+      setGateGenStatus('generated');
+    } catch (err) {
+      setGateGenStatus('error');
+      setGateGenError(err instanceof Error ? err.message : 'Erreur de génération.');
+    }
+  };
+
+  const disableGateInEditor = () => {
+    try {
+      const parsed = editorText.trim() ? (JSON.parse(editorText) as unknown) : (DEFAULT_SITE_CONFIG as unknown);
+      const normalized = mergeDeep(DEFAULT_SITE_CONFIG, parsed) as any;
+      normalized.admin = normalized.admin ?? {};
+      normalized.admin.gate = {
+        ...(normalized.admin.gate ?? DEFAULT_SITE_CONFIG.admin.gate),
+        enabled: false,
+        salt: '',
+        passwordHash: '',
+      };
+      setEditorText(JSON.stringify(normalized, null, 2));
+      setValidationError(null);
+      setGateGenError(null);
+      setGateGenStatus('idle');
+    } catch (err) {
+      setGateGenError(err instanceof Error ? err.message : 'Erreur.');
+      setGateGenStatus('error');
+    }
+  };
+
   const logout = () => {
+    lockGate();
     setToken('');
     setUserLogin(null);
     setStatus('idle');
@@ -403,6 +526,60 @@ const Admin: React.FC = () => {
     }
   };
 
+  if (requiresGate && !gateUnlocked) {
+    return (
+      <div className="min-h-screen bg-canvas">
+        <SEO title="Admin" description="Administration" />
+
+        <div className="max-w-xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+          <div className="bg-panel border border-white/10 shadow-soft rounded-3xl p-8">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-slate-200 text-sm font-semibold">
+              <Shield size={16} className="text-primary" /> Accès protégé
+            </div>
+            <h1 className="text-2xl md:text-3xl font-display font-extrabold text-white mt-4">Admin</h1>
+            <p className="text-slate-300 mt-2">
+              Entrez le mot de passe pour accéder à l’éditeur. (Le mot de passe n’est jamais stocké en clair.)
+            </p>
+
+            <div className="mt-6 space-y-3">
+              <input
+                type="password"
+                value={gatePassword}
+                onChange={(e) => setGatePassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') unlockGate();
+                }}
+                autoComplete="current-password"
+                className="w-full px-4 py-3 rounded-xl bg-canvas border border-white/10 text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition"
+                placeholder="Mot de passe admin"
+              />
+              <button
+                onClick={unlockGate}
+                disabled={!gatePassword || gateStatus === 'checking'}
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-primary text-white font-bold hover:bg-primary-dark transition disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {gateStatus === 'checking' ? <RefreshCw size={18} className="animate-spin" /> : <Lock size={18} />}
+                Déverrouiller
+              </button>
+
+              {gateStatus === 'error' && gateError ? (
+                <div className="rounded-2xl bg-red-500/10 border border-red-500/20 text-red-200 p-4 text-sm flex gap-2">
+                  <XCircle size={18} className="mt-0.5" />
+                  <div>{gateError}</div>
+                </div>
+              ) : null}
+
+              <div className="text-xs text-slate-400">
+                Mot de passe oublié ? Modifiez <code className="px-1 py-0.5 bg-white/5 border border-white/10 rounded">admin.gate</code>{' '}
+                dans <code className="px-1 py-0.5 bg-white/5 border border-white/10 rounded">public/data.config</code> sur GitHub.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-canvas">
       <SEO title="Admin" description="Administration" />
@@ -420,7 +597,15 @@ const Admin: React.FC = () => {
               poussez la mise à jour sur GitHub (déploiement automatique ensuite).
             </p>
           </div>
-          {token ? (
+          {requiresGate ? (
+            <button
+              onClick={logout}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition text-slate-200 font-semibold"
+              title="Verrouiller l’admin"
+            >
+              <Lock size={18} /> Verrouiller
+            </button>
+          ) : token ? (
             <button
               onClick={logout}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition text-slate-200 font-semibold"
@@ -549,6 +734,96 @@ const Admin: React.FC = () => {
                     <div>Fichier chargé. Vous pouvez éditer puis sauvegarder.</div>
                   </div>
                 ) : null}
+              </div>
+            </div>
+
+            <div className="mt-8 bg-panel border border-white/10 shadow-soft rounded-3xl p-6">
+              <h2 className="text-lg font-display font-bold text-white flex items-center gap-2">
+                <Lock size={18} className="text-primary" /> Mot de passe Admin
+              </h2>
+              <p className="text-sm text-slate-300 mt-2">
+                Protège <span className="font-semibold">/#/admin</span> avec un hash <span className="font-semibold">PBKDF2</span>{' '}
+                (le mot de passe n’est jamais stocké en clair).
+              </p>
+
+              <div className="mt-4 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Statut</span>
+                <span className={`font-bold ${requiresGate ? 'text-emerald-200' : 'text-slate-400'}`}>
+                  {requiresGate ? 'Actif' : 'Inactif'}
+                </span>
+              </div>
+
+              <div className="mt-6 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Nouveau mot de passe</label>
+                  <input
+                    value={newGatePassword}
+                    onChange={(e) => setNewGatePassword(e.target.value)}
+                    type="password"
+                    autoComplete="new-password"
+                    className="w-full px-4 py-2.5 rounded-xl bg-canvas border border-white/10 text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition"
+                    placeholder="12+ caractères (recommandé)"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Confirmer</label>
+                  <input
+                    value={newGatePassword2}
+                    onChange={(e) => setNewGatePassword2(e.target.value)}
+                    type="password"
+                    autoComplete="new-password"
+                    className="w-full px-4 py-2.5 rounded-xl bg-canvas border border-white/10 text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition"
+                    placeholder="Confirmer le mot de passe"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Itérations PBKDF2</label>
+                  <input
+                    value={gateIterations}
+                    onChange={(e) => setGateIterations(Number(e.target.value))}
+                    type="number"
+                    min={100000}
+                    max={2000000}
+                    step={50000}
+                    className="w-full px-4 py-2.5 rounded-xl bg-canvas border border-white/10 text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition font-mono"
+                  />
+                  <div className="text-xs text-slate-400">Plus élevé = plus lent = plus résistant au brute‑force.</div>
+                </div>
+
+                <button
+                  onClick={applyNewGateToEditor}
+                  disabled={gateGenStatus === 'generating'}
+                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {gateGenStatus === 'generating' ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+                  Générer & insérer dans l’éditeur
+                </button>
+
+                <button
+                  onClick={disableGateInEditor}
+                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-200 font-bold hover:bg-white/10 transition"
+                >
+                  <XCircle size={18} /> Désactiver (dans l’éditeur)
+                </button>
+
+                {gateGenStatus === 'generated' ? (
+                  <div className="rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 p-4 text-sm flex gap-2">
+                    <CheckCircle2 size={18} className="mt-0.5" />
+                    <div>Mot de passe configuré dans le JSON. Sauvegardez sur GitHub pour l’activer.</div>
+                  </div>
+                ) : null}
+
+                {gateGenStatus === 'error' && gateGenError ? (
+                  <div className="rounded-2xl bg-red-500/10 border border-red-500/20 text-red-200 p-4 text-sm flex gap-2">
+                    <XCircle size={18} className="mt-0.5" />
+                    <div>{gateGenError}</div>
+                  </div>
+                ) : null}
+
+                <div className="text-xs text-slate-400">
+                  Note : sur GitHub Pages (site statique), cette protection est côté client. La vraie sécurité reste votre token GitHub.
+                </div>
               </div>
             </div>
 
